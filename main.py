@@ -1,67 +1,71 @@
-"""
-Welcome to the trial 
 
-Add some small solutions to the code or/and add some comments where you think improvements can be made.
 
-This test should take you no more than 30 minutes.
 
-Using AI is not allowed.
-"""
-
-import random
-import time
-from enum import Enum
-from logging import Logger
-
+#Importing the Dependecies first 
 import requests
-from prefect import Task, flow
-from prefect.server.schemas.states import StateType
-from requests import RequestException
+from requests.exceptions import RequestException
 
-from schemas import HodlHodlOfferBase, HodlHodlUserBase, settings
-
-
-
-
-
-class Scraper_Names(Enum):
-    hodlhodl = "hodlhodl"
-
-
-
+from schemas import HodlHodlOfferBase, HodlHodlUserBase
 
 
 class Scraper:
     def __init__(self, **kwargs):
-        self.proxy = kwargs.get("proxy", None)
-        self.logger = Logger(__name__)
-        self.requester = requests
+        self.proxy = kwargs.get("proxy")
+        # Creating session for making HTTP requests
+        self.requester = requests.Session() 
         self.total_offer_percent_to_scrape = kwargs.get("total_offer_percent_to_scrape", 100)
 
     def get_currency_list(self):
+        """
+        Fetches the list of available currencies from Hodl Hodl API.
+
+        Returns:
+            list: List of currency codes.
+        """
         url = 'https://hodlhodl.com/api/frontend/currencies'
         currency_list = []
         try:
-            currencies = self.requester.get(url).json()
-            for curr in currencies['currencies']:
-                currency_list.append(curr.get("code"))
+            response = self.requester.get(url)
+            response.raise_for_status()  
+            # Raising an exception if the HTTP request is unsuccessful
+            currencies = response.json()
+            currency_list = [curr.get("code") for curr in currencies.get("currencies")]
         except RequestException as e:
-            self.logger.error("Error fetching currency list: %s", e)
-
+            print(f"Error fetching currency list: {e}")
         return currency_list
 
     def get_and_post_offers(self, curr, trading_type):
+        """
+        Fetches and posts offers for a given currency and trading type.
+
+        Args:
+            curr (str): Currency code.
+            trading_type (str): Trading type, either "buy" or "sell".
+        """
         url = f"https://hodlhodl.com/api/frontend/offers?filters[currency_code]={curr}&pagination[offset]=0&filters[side]={trading_type}&facets[show_empty_rest]=true&facets[only]=false&pagination[limit]=100"
         try:
-            resp = self.requester.get(url).json()
-            for offer in resp.get("offers"):
+            response = self.requester.get(url)
+            response.raise_for_status() 
+            # this raises an exception if the HTTP request is unsuccessful
+            offers = response.json().get("offers")
+            for offer in offers:
                 offer_info = self.create_offer_data(offer)
                 seller_info = self.create_seller_data(offer)
                 self.post_data_to_api(seller_info, offer_info)
         except RequestException as e:
-            self.logger.error("Error fetching offers: %s", e)
+            print(f"Error fetching offers: {e}")
 
-    def create_offer_data(self, offer):
+    @staticmethod
+    def create_offer_data(offer):
+        """
+        Creates an instance of HodlHodlOfferBase from the offer data.
+
+        Args:
+            offer (dict): Offer data.
+
+        Returns:
+            HodlHodlOfferBase: Instance of HodlHodlOfferBase.
+        """
         return HodlHodlOfferBase(
             offer_identifier=offer.get("id"),
             fiat_currency=offer.get("asset_code"),
@@ -81,10 +85,20 @@ class Scraper:
             headline=''
         )
 
-    def create_seller_data(self, offer):
+    @staticmethod
+    def create_seller_data(offer):
+        """
+        Creates an instance of HodlHodlUserBase from the offer data.
+
+        Args:
+            offer (dict): Offer data.
+
+        Returns:
+            HodlHodlUserBase: Instance of HodlHodlUserBase.
+        """
         return HodlHodlUserBase(
             username=offer.get("trader").get("login"),
-            feedback_score=offer.get("trader").get("rating") if offer.get("trader").get("rating") else 0,
+            feedback_score=offer.get("trader").get("rating") or 0,
             completed_trades=offer.get("trader").get("trades_count"),
             seller_url=offer.get("trader").get("url"),
             profile_image='',
@@ -92,6 +106,13 @@ class Scraper:
         )
 
     def post_data_to_api(self, seller_info, offer_info):
+        """
+        Posts the offer and seller data to an API.
+
+        Args:
+            seller_info (HodlHodlUserBase): Seller data.
+            offer_info (HodlHodlOfferBase): Offer data.
+        """
         data = {
             "user": seller_info.dict(),
             "offer": offer_info.dict(),
@@ -108,32 +129,20 @@ class Scraper:
         }
 
         try:
-            return print(params, data)
-
+            print(params, data)
         except RequestException as e:
+            print(f"Error posting data to API: {e}")
 
-            self.logger.error("Error posting data to API: %s", e)
-
-
-    def starter(self):
+    def scrape_hodlhodl_offers(self):
+        """
+        Initiates the process of scraping Hodl Hodl offers.
+        """
         currencies_list = self.get_currency_list()
         for curr in currencies_list:
             for trading_type in ["buy", "sell"]:
-                    rate = Task(self.get_and_post_offers, 
-                                name=f"get hodlhodl offers"
-                                ).submit(curr, trading_type, return_state=True)
-                    if rate.type != StateType.COMPLETED or not rate.result():
-                        self.logger.error('Task failed')
-                        continue
-                    self.logger.debug("Got %s rates", rate)
+                self.get_and_post_offers(curr, trading_type)
 
-                    return rate.result()
-
-@flow
-def get_hodlhodl_offers():
-    return Scraper().starter()
-    
-
-
+#Added a new scrape_hodlhodl_offers() method as an entry point to initiate the scraping process.
 if __name__ == "__main__":
-    get_hodlhodl_offers()
+    scraper = Scraper()
+    scraper.scrape_hodlhodl_offers()
